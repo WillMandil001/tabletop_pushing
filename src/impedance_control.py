@@ -20,6 +20,7 @@ pose_pub = None
 # [[min_x, max_x], [min_y, max_y], [min_z, max_z]]
 position_limits = [[0.2, 0.6], [-0.6, 0.6], [0.05, 0.9]]
 map_translation = [0.3, -0.2, 0.0]
+NUM_ANGLE_STEPS = 10
 
 class FrankaRobot(object):
     def __init__(self):
@@ -79,19 +80,19 @@ class WeightMap:
 
     def get_next_target(self):
         # Normalize the weights to make them probabilities
-        probabilities = self.map / np.sum(self.map)
-        # inverse_probabilities = -self.map / np.sum(-self.map)
+        # probabilities = self.map / np.sum(self.map)
+        inverse_probabilities = -self.map / np.sum(-self.map)
         # Flatten the probabilities to 1D
-        probabilities_1d = probabilities.flatten()
+        probabilities_1d = inverse_probabilities.flatten()
         # Choose a random index based on the probabilities
         target_index_1d = np.random.choice(len(probabilities_1d), p=probabilities_1d)
         # Convert the 1D index back to 2D coordinates
         target_x, target_y = np.unravel_index(target_index_1d, (self.size_x, self.size_y))
-        self.probabilities = probabilities
+        self.probabilities = inverse_probabilities
         return (target_x, target_y)
 
 
-def interpolate_movement(start_position, end_position):
+def interpolate_movement(start_position, end_position, start_angle_quat):
     sx, sy = start_position[0], start_position[1]
     ex, ey = end_position[0], end_position[1]
     # Calculate the distance between the start and end positions
@@ -111,9 +112,17 @@ def interpolate_movement(start_position, end_position):
         positions.append((sx + i * x_step, sy + i * y_step))
 
     # Calculate the angle between the start and end positions
-    angle = np.arctan2(ey - sy, ex - sx)
 
-    return positions, angle
+    roll, pitch, yaw = tf.transformations.euler_from_quaternion(start_angle_quat)
+    start_angle = yaw
+    finish_angle = np.arctan2(ey - sy, ex - sx)
+
+    angle_step_size = 1.0 / NUM_ANGLE_STEPS
+    angles = []
+    for i in range(num_steps):
+        angles.append(start_angle + i * (finish_angle - start_angle) * angle_step_size)
+
+    return positions, angles
 
 def move_to_next_position(position, angle):
     new_pose.header.frame_id = link_name
@@ -122,10 +131,10 @@ def move_to_next_position(position, angle):
     new_pose.pose.position.y = position[1]
     new_pose.pose.position.z = new_pose.pose.position.z
 
-    if angle > 2.6:
-        angle = 2.6
-    elif angle < -2.6:
-        angle = -2.6
+    if angle > 2.5:
+        angle = 2.5
+    elif angle < -2.5:
+        angle = -2.5
 
     print("angle: ", angle)
 
@@ -167,8 +176,8 @@ if __name__ == "__main__":
     print(robot_pose)
 
     robot = FrankaRobot()
-    robot_pose_link8 = robot.get_robot_task_state()
-    print(robot_pose_link8)
+    robot_current_pose = robot.get_robot_task_state()
+    print(robot_current_pose)
 
     new_pose = PoseStamped()
     new_pose.header.frame_id = link_name
@@ -183,7 +192,7 @@ if __name__ == "__main__":
     pose_pub.publish(new_pose)
 
     weight_map = WeightMap(400, 400)
-    current_position = (robot_pose_link8[0][0] ,robot_pose_link8[0][1])
+    current_position = (robot_current_pose[0][0] ,robot_current_pose[0][1])
     weight_map.update(robot_to_map_translation(current_position))
 
     # TODO: move to center of the map
@@ -196,23 +205,26 @@ if __name__ == "__main__":
         if not moving and not angle_moving:
             next_position = weight_map.get_next_target()
             next_position = map_to_robot_translation(next_position)
-            positions, angle = interpolate_movement(current_position, next_position)
+            positions, angles = interpolate_movement(current_position, next_position, robot_current_pose[1])
             position_index = 0
             angle_moves = 0
             angle_moving = True
 
         if angle_moving:
-            print("angle_moving: ", angle_moves,  angle)
-            move_to_next_position(positions[0], angle)
+            print("angle_moving: ", angle_moves,  angles)
+            move_to_next_position(positions[0], angles[angle_moves])
             angle_moves +=1
-            if angle_moves == 10:
+            if angle_moves == NUM_ANGLE_STEPS:
+                angle_moves -= 1
+
+            if angle_moves == 15:
                 angle_moving = False
                 moving = True
                 angle_moves = 0
   
         if moving:
             print("moving: ", position_index)
-            move_to_next_position(positions[position_index], angle)
+            move_to_next_position(positions[position_index], angles[-1])
 
             robot_current_pose = robot.get_robot_task_state()
             weight_map.update(robot_to_map_translation((robot_current_pose[0][0], robot_current_pose[0][1])))
@@ -225,7 +237,7 @@ if __name__ == "__main__":
 
         plt.imshow(weight_map.probabilities, cmap='hot', interpolation='nearest')
         plt.colorbar()
-        frame_filename = f"/home/willmandil/catkin_ws/src/tabletop_pushing/robot_position_map/frame_{position_index}.png"
+        frame_filename = f"/home/willmandil/catkin_ws/src/tabletop_pushing/robot_position_map/inverse_prob_frame_{position_index}.png"
         plt.savefig(frame_filename)
         plt.close()
 
