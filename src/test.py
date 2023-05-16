@@ -1,7 +1,7 @@
 import numpy as np
 
 class WeightMap:
-    def __init__(self, size_x=400, size_y=400, initial_weight=1.0, update_weight=0.1, decay_rate=0.05, radius= 25):
+    def __init__(self, size_x=400, size_y=400, initial_weight=1.0, update_weight=0.5, decay_rate=0.1, radius= 50):
         self.size_x = size_x
         self.size_y = size_y
         self.map = np.full((size_x, size_y), initial_weight)
@@ -17,25 +17,24 @@ class WeightMap:
                 distance = np.sqrt((i - position[0])**2 + (j - position[1])**2)
                 if distance <= self.radius:
                     weight_increase = (1 - distance/self.radius) * self.update_weight
-                    self.map[i, j] += weight_increase
+                    self.map[i, j] -= weight_increase
 
         # Decrease the weight at the current position
         self.map += self.decay_rate
 
         # Ensure the weight does not go below zero
-        self.map[position] = max(self.map[position], 0)
+        # self.map[position] = max(self.map[position], 0)
 
     def get_next_target(self):
         # Normalize the weights to make them probabilities
-        probabilities = -self.map / np.sum(-self.map)
-
-        # inverted_probabilities = 1 - probabilities
-        # Normalize the inverted probabilities
-
-        # inverted_probabilities /= np.sum(inverted_probabilities)
+        self.map = self.map + np.abs(np.min(self.map))
+        probabilities = self.map / np.sum(self.map)
+        print(np.min(self.map))
+        print(np.max(self.map))
 
         # Flatten the probabilities to 1D
         probabilities_1d = probabilities.flatten()
+        print(np.sum(probabilities_1d))
 
         # Choose a random index based on the probabilities
         target_index_1d = np.random.choice(len(probabilities_1d), p=probabilities_1d)
@@ -63,7 +62,6 @@ def interpolate_movement(start_position, end_position):
     # Calculate the step size
     step_size = 1.0 / num_steps
 
-
     # Calculate the x and y step sizes
     x_step = (ex - sx) * step_size
     y_step = (ey - sy) * step_size
@@ -81,7 +79,7 @@ current_position = (0, 0)
 weight_map.update(current_position)
 
 weightmap_list = [np.array(weight_map.probabilities)]
-for i in range(200):
+for i in range(10):
     next_position = weight_map.get_next_target()
 
     # Interpolate the movement between the current position and the next position
@@ -125,7 +123,7 @@ def save_weight_maps_as_gif(weight_maps, filename):
             writer.append_data(image)
 
     # Delete the individual frames
-    for filename in filenames:
-        os.remove(filename)
+    # for filename in filenames:
+    #     os.remove(filename)
 
-save_weight_maps_as_gif(weightmap_list, 'weight_maps_small.gif')
+save_weight_maps_as_gif(weightmap_list, 'weight_maps_test.gif')
