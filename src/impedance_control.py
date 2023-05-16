@@ -15,37 +15,180 @@ from visualization_msgs.msg import InteractiveMarker, InteractiveMarkerControl
 from interactive_markers.interactive_marker_server import InteractiveMarkerServer, InteractiveMarkerFeedback
 
 robot_pose = PoseStamped()
-initial_pose_found = False
 pose_pub = None
 # [[min_x, max_x], [min_y, max_y], [min_z, max_z]]
 position_limits = [[0.2, 0.6], [-0.6, 0.6], [0.05, 0.9]]
 map_translation = [0.3, -0.2, 0.0]
 NUM_ANGLE_STEPS = 10
 
-class FrankaRobot(object):
-    def __init__(self):
-        super(FrankaRobot, self).__init__()
-        moveit_commander.roscpp_initialize(sys.argv)
-        self.move_group = moveit_commander.MoveGroupCommander("panda_arm")
-        self.move_group.set_end_effector_link("panda_link8")
 
-    def get_robot_task_state(self):
-        robot_ee_pose = self.move_group.get_current_pose().pose
-        return [[robot_ee_pose.position.x, robot_ee_pose.position.y, robot_ee_pose.position.z], [robot_ee_pose.orientation.x, robot_ee_pose.orientation.y, robot_ee_pose.orientation.z, robot_ee_pose.orientation.w]]
+class Robot:
+    def __init__(self, link_name):
+        self.moving = False
+        self.angle_moving = False
+        self.position_index = 0
+        self.angle_moves = 0
+        self.initial_pose_found = False
+        self.link_name = link_name
+
+        # get start state of robot:
+        state_sub = rospy.Subscriber("franka_state_controller/franka_states", FrankaState, self.franka_state_callback_start)
+        self.pose_pub = rospy.Publisher("equilibrium_pose", PoseStamped, queue_size=10)
+        while not self.initial_pose_found:
+            rospy.sleep(1)
+        state_sub.unregister()
+
+        print(self.robot_pose)
+        self.pose_pub.publish(self.robot_pose)
+
+        # initialize the map:
+        self.weight_map = WeightMap(400, 400)
+        self.current_position = (self.robot_current_pose[0][0] ,self.robot_current_pose[0][1])
+        self.weight_map.update(self.robot_to_map_translation(self.current_position))
+
+        state_sub = rospy.Subscriber("franka_state_controller/franka_states", FrankaState, self.franka_state_callback)
+        self.rate = rospy.Rate(1)
+        while not rospy.is_shutdown():
+            self.rate.sleep()
+
+    def franka_state_callback_start(self, msg):
+        self.robot_pose = PoseStamped()
+        initial_quaternion = tf.transformations.quaternion_from_matrix(np.transpose(np.reshape(msg.O_T_EE, (4, 4))))
+        initial_quaternion = initial_quaternion / np.linalg.norm(initial_quaternion)
+        self.robot_pose.pose.orientation.x = initial_quaternion[0]
+        self.robot_pose.pose.orientation.y = initial_quaternion[1]
+        self.robot_pose.pose.orientation.z = initial_quaternion[2]
+        self.robot_pose.pose.orientation.w = initial_quaternion[3]
+        self.robot_pose.pose.position.x = msg.O_T_EE[12]
+        self.robot_pose.pose.position.y = msg.O_T_EE[13]
+        self.robot_pose.pose.position.z = msg.O_T_EE[14]
+
+        self.initial_pose_found = True
+        self.robot_current_pose = [[self.robot_pose.pose.position.x, self.robot_pose.pose.position.y, self.robot_pose.pose.position.z], [self.robot_pose.pose.orientation.x, self.robot_pose.pose.orientation.y, self.robot_pose.pose.orientation.z, self.robot_pose.pose.orientation.w]]
+
+    def franka_state_callback(self, msg):
+        self.robot_pose = PoseStamped()
+        initial_quaternion = tf.transformations.quaternion_from_matrix(np.transpose(np.reshape(msg.O_T_EE, (4, 4))))
+        initial_quaternion = initial_quaternion / np.linalg.norm(initial_quaternion)
+        self.robot_pose.pose.orientation.x = initial_quaternion[0]
+        self.robot_pose.pose.orientation.y = initial_quaternion[1]
+        self.robot_pose.pose.orientation.z = initial_quaternion[2]
+        self.robot_pose.pose.orientation.w = initial_quaternion[3]
+        self.robot_pose.pose.position.x = msg.O_T_EE[12]
+        self.robot_pose.pose.position.y = msg.O_T_EE[13]
+        self.robot_pose.pose.position.z = msg.O_T_EE[14]
+        self.robot_current_pose = [[self.robot_pose.pose.position.x, self.robot_pose.pose.position.y, self.robot_pose.pose.position.z], [self.robot_pose.pose.orientation.x, self.robot_pose.pose.orientation.y, self.robot_pose.pose.orientation.z, self.robot_pose.pose.orientation.w]]
+
+        self.initial_pose_found = True
+
+        if not self.moving and not self.angle_moving:
+            print("Calculating next position")
+            next_position = self.weight_map.get_next_target()
+            next_position = self.map_to_robot_translation(next_position)
+            self.positions, self.angles = self.interpolate_movement(self.current_position, next_position, self.robot_current_pose[1])
+            self.position_index = 0
+            self.angle_moves = 0
+            self.angle_moving = True
+            return
+
+        if self.angle_moving:
+            print("angle moving: ", self.angle_moves)
+            print(self.angles)
+            self.move_to_next_position(self.positions[0], self.angles[self.angle_moves])
+            self.angle_moves +=1
+            if self.angle_moves == NUM_ANGLE_STEPS:
+                self.angle_moving = False
+                self.moving = True
+                self.angle_moves = 0
+            return
+
+        if self.moving:
+            print("moving: ", self.position_index)
+            self.move_to_next_position(self.positions[self.position_index], self.angles[-1])
+
+            self.weight_map.update(self.robot_to_map_translation((self.robot_current_pose[0][0], self.robot_current_pose[0][1])))
+
+            self.current_position = (self.robot_current_pose[0][0], self.robot_current_pose[0][1])
+
+            self.position_index += 1
+            if self.position_index == len(self.positions):
+                self.moving = False
+            return
+
+        plt.imshow(self.weight_map.probabilities, cmap='hot', interpolation='nearest')
+        plt.colorbar()
+        frame_filename = f"/home/willmandil/catkin_ws/src/tabletop_pushing/robot_position_map/inverse_prob_frame_{self.position_index}.png"
+        plt.savefig(frame_filename)
+        plt.close()
+
+        self.rate.sleep()
 
 
-def franka_state_callback(msg):
-    initial_quaternion = tf.transformations.quaternion_from_matrix(np.transpose(np.reshape(msg.O_T_EE, (4, 4))))
-    initial_quaternion = initial_quaternion / np.linalg.norm(initial_quaternion)
-    robot_pose.pose.orientation.x = initial_quaternion[0]
-    robot_pose.pose.orientation.y = initial_quaternion[1]
-    robot_pose.pose.orientation.z = initial_quaternion[2]
-    robot_pose.pose.orientation.w = initial_quaternion[3]
-    robot_pose.pose.position.x = msg.O_T_EE[12]
-    robot_pose.pose.position.y = msg.O_T_EE[13]
-    robot_pose.pose.position.z = msg.O_T_EE[14]
-    global initial_pose_found
-    initial_pose_found = True
+    def interpolate_movement(self, start_position, end_position, start_angle_quat):
+        sx, sy = start_position[0], start_position[1]
+        ex, ey = end_position[0], end_position[1]
+        # Calculate the distance between the start and end positions
+        distance = np.sqrt((sx - ex)**2 + (sy - ey)**2)
+        # Calculate the number of steps to take
+        num_steps = int(distance / 0.015)
+        if num_steps == 0:
+            return [start_position]
+        # Calculate the step size
+        step_size = 1.0 / num_steps
+        # Calculate the x and y step sizes
+        x_step = (ex - sx) * step_size
+        y_step = (ey - sy) * step_size
+        # Create a list of positions to move to
+        positions = []
+        for i in range(num_steps):
+            positions.append((sx + i * x_step, sy + i * y_step))
+
+        # Calculate the angle between the start and end positions
+
+        roll, pitch, yaw = tf.transformations.euler_from_quaternion(start_angle_quat)
+        start_angle = yaw
+        finish_angle = np.arctan2(ey - sy, ex - sx)
+
+        angle_step_size = 1.0 / NUM_ANGLE_STEPS
+        angles = []
+        for i in range(NUM_ANGLE_STEPS):
+            angles.append(start_angle + i * (finish_angle - start_angle) * angle_step_size)
+
+        return positions, angles
+
+    def move_to_next_position(self, position, angle):
+        new_pose = PoseStamped()
+        new_pose.header.frame_id = link_name
+        new_pose.header.stamp = rospy.Time(0)
+        new_pose.pose.position.x = position[0]
+        new_pose.pose.position.y = position[1]
+        new_pose.pose.position.z = new_pose.pose.position.z
+
+        if angle > 2.5:
+            angle = 2.5
+        elif angle < -2.5:
+            angle = -2.5
+
+        # convert quaternion to euler
+        roll, pitch, yaw = tf.transformations.euler_from_quaternion([1, 0, 0, 0])
+        quaternion = tf.transformations.quaternion_from_euler(roll, pitch, angle)
+
+        new_pose.pose.orientation.x = quaternion[0]
+        new_pose.pose.orientation.y = quaternion[1]
+        new_pose.pose.orientation.z = quaternion[2]
+        new_pose.pose.orientation.w = quaternion[3]
+
+        self.pose_pub.publish(new_pose)
+
+    def map_to_robot_translation(self, map_position):
+        robot_x = (map_position[0] * 0.001) + map_translation[0]
+        robot_y = (map_position[1] * 0.001) + map_translation[1]
+        return (robot_x, robot_y)
+
+    def robot_to_map_translation(self, robot_position):  # works with map_translation = [0.2, -0.2, 0.0]
+        map_x = int((robot_position[0] - map_translation[0]) * 1000)
+        map_y = int((robot_position[1] - map_translation[1]) * 1000)
+        return (map_x, map_y)
 
 
 class WeightMap:
@@ -91,154 +234,8 @@ class WeightMap:
         self.probabilities = inverse_probabilities
         return (target_x, target_y)
 
-
-def interpolate_movement(start_position, end_position, start_angle_quat):
-    sx, sy = start_position[0], start_position[1]
-    ex, ey = end_position[0], end_position[1]
-    # Calculate the distance between the start and end positions
-    distance = np.sqrt((sx - ex)**2 + (sy - ey)**2)
-    # Calculate the number of steps to take
-    num_steps = int(distance / 0.015)
-    if num_steps == 0:
-        return [start_position]
-    # Calculate the step size
-    step_size = 1.0 / num_steps
-    # Calculate the x and y step sizes
-    x_step = (ex - sx) * step_size
-    y_step = (ey - sy) * step_size
-    # Create a list of positions to move to
-    positions = []
-    for i in range(num_steps):
-        positions.append((sx + i * x_step, sy + i * y_step))
-
-    # Calculate the angle between the start and end positions
-
-    roll, pitch, yaw = tf.transformations.euler_from_quaternion(start_angle_quat)
-    start_angle = yaw
-    finish_angle = np.arctan2(ey - sy, ex - sx)
-
-    angle_step_size = 1.0 / NUM_ANGLE_STEPS
-    angles = []
-    for i in range(num_steps):
-        angles.append(start_angle + i * (finish_angle - start_angle) * angle_step_size)
-
-    return positions, angles
-
-def move_to_next_position(position, angle):
-    new_pose.header.frame_id = link_name
-    new_pose.header.stamp = rospy.Time(0)
-    new_pose.pose.position.x = position[0]
-    new_pose.pose.position.y = position[1]
-    new_pose.pose.position.z = new_pose.pose.position.z
-
-    if angle > 2.5:
-        angle = 2.5
-    elif angle < -2.5:
-        angle = -2.5
-
-    print("angle: ", angle)
-
-    # convert quaternion to euler
-    roll, pitch, yaw = tf.transformations.euler_from_quaternion([1, 0, 0, 0])
-    quaternion = tf.transformations.quaternion_from_euler(roll, pitch, angle)
-
-    new_pose.pose.orientation.x = quaternion[0]
-    new_pose.pose.orientation.y = quaternion[1]
-    new_pose.pose.orientation.z = quaternion[2]
-    new_pose.pose.orientation.w = quaternion[3]
-
-    pose_pub.publish(new_pose)
-
-def map_to_robot_translation(map_position):
-    robot_x = (map_position[0] * 0.001) + map_translation[0]
-    robot_y = (map_position[1] * 0.001) + map_translation[1]
-    return (robot_x, robot_y)
-
-def robot_to_map_translation(robot_position):  # works with map_translation = [0.2, -0.2, 0.0]
-    map_x = int((robot_position[0] - map_translation[0]) * 1000)
-    map_y = int((robot_position[1] - map_translation[1]) * 1000)
-    return (map_x, map_y)
-
 if __name__ == "__main__":
     rospy.init_node("equilibrium_pose_node")
-    state_sub = rospy.Subscriber("franka_state_controller/franka_states", FrankaState, franka_state_callback)
-    listener = tf.TransformListener()
     link_name = rospy.get_param("~link_name")
 
-    # Get initial pose for the robot
-    while not initial_pose_found:
-        rospy.sleep(1)
-    state_sub.unregister()
-
-    pose_pub = rospy.Publisher("equilibrium_pose", PoseStamped, queue_size=10)
-
-    print("-------- robot pose --------")
-    print(robot_pose)
-
-    robot = FrankaRobot()
-    robot_current_pose = robot.get_robot_task_state()
-    print(robot_current_pose)
-
-    new_pose = PoseStamped()
-    new_pose.header.frame_id = link_name
-    new_pose.header.stamp = rospy.Time(0)
-    new_pose.pose.position.x = robot_pose.pose.position.x
-    new_pose.pose.position.y = robot_pose.pose.position.y
-    new_pose.pose.position.z = robot_pose.pose.position.z
-    new_pose.pose.orientation.x = robot_pose.pose.orientation.x
-    new_pose.pose.orientation.y = robot_pose.pose.orientation.y
-    new_pose.pose.orientation.z = robot_pose.pose.orientation.z
-    new_pose.pose.orientation.w = robot_pose.pose.orientation.w
-    pose_pub.publish(new_pose)
-
-    weight_map = WeightMap(400, 400)
-    current_position = (robot_current_pose[0][0] ,robot_current_pose[0][1])
-    weight_map.update(robot_to_map_translation(current_position))
-
-    # TODO: move to center of the map
-
-    moving = False
-    angle_moving = False
-    rate = rospy.Rate(5)
-    while not rospy.is_shutdown():
-
-        if not moving and not angle_moving:
-            next_position = weight_map.get_next_target()
-            next_position = map_to_robot_translation(next_position)
-            positions, angles = interpolate_movement(current_position, next_position, robot_current_pose[1])
-            position_index = 0
-            angle_moves = 0
-            angle_moving = True
-
-        if angle_moving:
-            print("angle_moving: ", angle_moves,  angles)
-            move_to_next_position(positions[0], angles[angle_moves])
-            angle_moves +=1
-            if angle_moves == NUM_ANGLE_STEPS:
-                angle_moves -= 1
-
-            if angle_moves == 15:
-                angle_moving = False
-                moving = True
-                angle_moves = 0
-  
-        if moving:
-            print("moving: ", position_index)
-            move_to_next_position(positions[position_index], angles[-1])
-
-            robot_current_pose = robot.get_robot_task_state()
-            weight_map.update(robot_to_map_translation((robot_current_pose[0][0], robot_current_pose[0][1])))
-
-            current_position = (robot_current_pose[0][0], robot_current_pose[0][1])
-
-            position_index += 1
-            if position_index == len(positions):
-                moving = False
-
-        plt.imshow(weight_map.probabilities, cmap='hot', interpolation='nearest')
-        plt.colorbar()
-        frame_filename = f"/home/willmandil/catkin_ws/src/tabletop_pushing/robot_position_map/inverse_prob_frame_{position_index}.png"
-        plt.savefig(frame_filename)
-        plt.close()
-
-        rate.sleep()
+    robot = Robot(link_name)
