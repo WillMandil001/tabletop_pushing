@@ -51,7 +51,7 @@ def franka_state_callback(msg):
 
 
 class WeightMap:
-    def __init__(self, size_x=400, size_y=400, initial_weight=0.0, update_weight=1.0, decay_rate=0.01, radius= 50):
+    def __init__(self, size_x=400, size_y=400, initial_weight=0.0, update_weight=1.0, decay_rate=0.001, radius= 50):
         self.size_x = size_x
         self.size_y = size_y
         self.map = np.full((size_x, size_y), initial_weight)

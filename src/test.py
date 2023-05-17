@@ -1,7 +1,7 @@
 import numpy as np
 
 class WeightMap:
-    def __init__(self, size_x=400, size_y=400, initial_weight=1.0, update_weight=0.5, decay_rate=0.1, radius= 50):
+    def __init__(self, size_x=400, size_y=400, initial_weight=1.0, update_weight=0.5, decay_rate=0.1, radius= 30):
         self.size_x = size_x
         self.size_y = size_y
         self.map = np.full((size_x, size_y), initial_weight)
@@ -79,7 +79,7 @@ current_position = (0, 0)
 weight_map.update(current_position)
 
 weightmap_list = [np.array(weight_map.probabilities)]
-for i in range(10):
+for i in range(150):
     next_position = weight_map.get_next_target()
 
     # Interpolate the movement between the current position and the next position
@@ -123,7 +123,7 @@ def save_weight_maps_as_gif(weight_maps, filename):
             writer.append_data(image)
 
     # Delete the individual frames
-    # for filename in filenames:
-    #     os.remove(filename)
+    for filename in filenames:
+        os.remove(filename)
 
 save_weight_maps_as_gif(weightmap_list, 'weight_maps_test.gif')
