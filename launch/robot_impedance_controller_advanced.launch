@@ -1,0 +1,30 @@
+<?xml version="1.0" ?>
+<launch>
+    <arg name="robot_ip" default="172.16.0.2"/>
+    <arg name="load_gripper" default="true" />
+
+    <!-- CONTROL -->
+    <include file="$(find franka_control)/launch/franka_control.launch" >
+        <arg name="robot_ip" value="$(arg robot_ip)" />
+        <arg name="load_gripper" value="$(arg load_gripper)" />
+    </include>
+
+    <!-- CONTROLLER -->
+    <rosparam command="load" file="$(find tabletop_pushing)/config/franka_controllers.yaml" />
+    <node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" args="cartesian_impedance_advanced_controller"/>
+
+    <!-- RVIZ -->
+    <node pkg="rviz" type="rviz" output="screen" name="rviz" args="-d $(find franka_example_controllers)/launch/rviz/franka_description_with_marker.rviz"/>
+
+    <!-- Run the main MoveIt executable without trajectory execution (we do not have controllers configured by default) -->
+    <include file="$(find panda_moveit_config)/launch/move_group.launch" pass_all_args="true">
+        <arg name="allow_trajectory_execution" value="false" />
+    </include>
+
+    <!-- IMPEDNACE CONTROLLED DATASET -->
+    <node name="impedance_control" pkg="tabletop_pushing" type="impedance_control.py" required="true" output="screen">
+        <param name="link_name" value="panda_link0" />
+        <!-- <remap from="equilibrium_pose" to="/cartesian_impedance_advanced_controller/equilibrium_pose" /> -->
+    </node>
+
+</launch>

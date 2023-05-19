@@ -167,9 +167,11 @@ if __name__ == "__main__":
     robot = FrankaRobot()
 
     # Get initial pose for the robot
+    print("Impedance Controller: getting initial pose")
     while not initial_pose_found:
         rospy.sleep(1)
     state_sub.unregister()
+    print("Impedance Controller: initial pose found")
 
     pose_pub = rospy.Publisher("equilibrium_pose", PoseStamped, queue_size=10)
 
@@ -186,26 +188,35 @@ if __name__ == "__main__":
 
     i = 0
     rate = rospy.Rate(1)
+    print("Impedance Controller: publishing initial pose")
     while not rospy.is_shutdown() and i < 5:
         print(i)    
         pose_pub.publish(new_pose)
         i += 1
         rate.sleep()
+    print("Impedance Controller: initial pose published")
 
     robot_current_pose = robot.get_robot_task_state()
 
+    print("Impedance Controller: waiting for robot to reach initial pose")
     rospy.sleep(2)
+    print("Impedance Controller: robot reached initial pose")
 
+
+    print("Impedance Controller: setting up weight map")
     weight_map = WeightMap(400, 400)
     current_position = (robot_current_pose[0][0] ,robot_current_pose[0][1])
     weight_map.update(robot_to_map_translation(current_position))
+    print("Impedance Controller: setting up weight map complete")
+
 
     moving = False
     angle_moving = False
     pushing_count = 0
-    rate = rospy.Rate(10)
+    rate = rospy.Rate(15)
+    print("Impedance Controller: starting main loop")
     while not rospy.is_shutdown():
-        print("moving: ", moving)
+        # print("moving: ", moving)
 
         if not moving and not angle_moving:
             robot_current_pose = robot.get_robot_task_state()
@@ -219,7 +230,7 @@ if __name__ == "__main__":
             angle_moving = True
 
         if angle_moving:
-            print("angle_moving: ", angle_moves,  angles)
+            # print("angle_moving: ", angle_moves,  angles)
             move_to_next_position(positions[0], angles[angle_moves])
             angle_moves +=1
             if angle_moves == NUM_ANGLE_STEPS:
@@ -229,7 +240,7 @@ if __name__ == "__main__":
                 rospy.sleep(2)
 
         if moving:
-            print("moving: ", position_index)
+            # print("moving: ", position_index)
             move_to_next_position(positions[position_index], angles[-1])
 
             robot_current_pose = robot.get_robot_task_state()
@@ -248,26 +259,11 @@ if __name__ == "__main__":
                 pushing_count += 1
                 rospy.sleep(2)
 
+        # print to 4 decimal places
+        try:
+            print("z height: {:.4f}".format(robot_current_pose[0][2]))
+        except:
+            pass
+
+
         rate.sleep()
-
-
-
-
-# print("===== Pose - from controller =====")
-# print([new_pose.pose.position.x, new_pose.pose.position.y, new_pose.pose.position.z], tf.transformations.euler_from_quaternion([new_pose.pose.orientation.x, new_pose.pose.orientation.y, new_pose.pose.orientation.z, new_pose.pose.orientation.w]))
-
-# print("===== Pose - from moveit     =====")
-# print(robot_current_pose[0], tf.transformations.euler_from_quaternion(robot_current_pose[1]))
-
-# ===== Pose - from controller =====
-# [0.43151358861631106, 0.03405750663734303, 0.4551336034385356] (-3.02576480440015, -0.13171111486893855, 0.040845744706281356)
-# ===== Pose - from moveit     =====
-# [0.41851071511085786, 0.021600150732486736, 0.5569666132608113] (-2.966782402514508, -0.011871893588937912, -0.7378482053103548)
-# offset: [0.0130028735054532, 0.012457355904856294, -0.1018330098222757] (-0.05898240188564102, 0.11983922127900064, 0.7786939490166362)
-
-
-# ===== Pose - from controller =====
-# [0.5188854870018338, -0.031004326693353176, 0.2794326227062691] (-2.9748417125182653, -0.030345447580374885, -1.2124338948446887)
-# ===== Pose - from moveit     =====
-# [0.5016729828389496, -0.0341299036377953, 0.38127232528479854] (-3.001935520621518, 0.0959427467407812, -1.988614667373374)
-# offset: [0.0172125041628842, 0.003125576944442124, -0.10183970257852943] (0.0270938081032527, -0.12628819432115608, 0.7761807725286853)

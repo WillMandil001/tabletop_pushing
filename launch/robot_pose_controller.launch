@@ -1,0 +1,43 @@
+<?xml version="1.0" ?>
+<launch>
+    <arg name="robot_ip" default="172.16.0.2"/>
+    <arg name="controller" default="position"/>
+    <arg name="load_gripper" default="true" />
+
+    <!-- Arguments passe dto the XELA launcher. -->
+    <rosparam command="load" file="$(find franka_control)/config/default_controllers.yaml" />
+    <rosparam command="load" file="$(find franka_control)/config/franka_controllers.yaml" />
+    <node name="state_controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" args="franka_state_controller"/>
+    <node name="position_controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" args="position_joint_trajectory_controller" if="$(eval controller == 'position')"/>
+    <node name="position_controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" args="--stopped position_joint_trajectory_controller" unless="$(eval controller == 'position')"/>
+    <node name="torque_controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" args="franka_zero_torque_controller" if="$(eval controller == 'torque')"/>
+    <node name="torque_controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" args="--stopped franka_zero_torque_controller" unless="$(eval controller == 'torque')"/>
+    <node name="impedance_controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" args="cartesian_impedance_controller" if="$(eval controller == 'impedance')"/>
+    <node name="impedance_controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" args="--stopped cartesian_impedance_controller" unless="$(eval controller == 'impedance')"/>
+    <node name="impedance_advanced_controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" args="cartesian_impedance_advanced_controller" if="$(eval controller == 'impedance_advanced')"/>
+    <node name="impedance_advanced_controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" args="--stopped cartesian_impedance_advanced_controller" unless="$(eval controller == 'impedance_advanced')"/>
+    <node name="impedance_pressure_controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" args="cartesian_impedance_pressure_controller" if="$(eval controller == 'impedance_pressure')"/>
+    <node name="impedance_pressure_controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" args="--stopped cartesian_impedance_pressure_controller" unless="$(eval controller == 'impedance_pressure')"/>
+
+    <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" output="screen"/>
+    <node name="joint_state_publisher" type="joint_state_publisher" pkg="joint_state_publisher" output="screen">
+        <rosparam if="$(arg load_gripper)" param="source_list">[franka_state_controller/joint_states, franka_gripper/joint_states] </rosparam>
+        <rosparam unless="$(arg load_gripper)" param="source_list">[franka_state_controller/joint_states] </rosparam>
+        <param name="rate" value="30"/>
+    </node>
+    <node name="joint_state_desired_publisher" type="joint_state_publisher" pkg="joint_state_publisher" output="screen">
+        <rosparam if="$(arg load_gripper)" param="source_list">[franka_state_controller/joint_states_desired, franka_gripper/joint_states] </rosparam>
+        <rosparam unless="$(arg load_gripper)" param="source_list">[franka_state_controller/joint_states_desired] </rosparam>
+    <param name="rate" value="30"/>
+        <remap from="/joint_states" to="/joint_states_desired" />
+    </node>
+
+    <include file="$(find panda_moveit_config)/launch/move_group.launch">
+        <arg name="fake_execution" value="false"/>
+    </include>
+
+    <include file="$(find panda_moveit_config)/launch/moveit_rviz.launch"/>
+
+    <node name="rqt_reconfigure" type="rqt_reconfigure" pkg="rqt_reconfigure" output="screen" if="$(arg launch_rqt_reconfigure)"/> 
+
+</launch>
